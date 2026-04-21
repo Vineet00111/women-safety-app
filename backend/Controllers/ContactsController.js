@@ -120,31 +120,33 @@ const SendEmergencyInfo = async (req, res) => {
    
     const mapsLink = `https://www.google.com/maps/search/?api=1&query=${location.latitude},${location.longitude}`;
 
+    // const mapsLink = `https://www.google.com/maps?q=${location.latitude},${location.longitude}`;
+
     
     const messageText = `EMERGENCY ALERT! Location: ${mapsLink} Please respond immediately.`;
 
    
     const smsPromises = contactNumbers.map(async (number) => {
       try {
-        // const response = await axios({
-        //   method: 'post',
-        //   url: 'https://www.fast2sms.com/dev/bulkV2',
-        //   headers: {
-        //     'authorization': process.env.FAST2SMS_API_KEY,
-        //     'Content-Type': 'application/json'
-        //   },
-        //   data: {
-        //     route: 'q', 
-        //     message: messageText,
-        //     numbers: number.replace(/\D/g, ''), 
-        //     flash: 0
-        //   }
-        // });
+        const response = await axios({
+          method: 'post',
+          url: 'https://www.fast2sms.com/dev/bulkV2',
+          headers: {
+            'authorization': process.env.FAST2SMS_API_KEY,
+            'Content-Type': 'application/json'
+          },
+          data: {
+            route: 'q', 
+            message: messageText,
+            numbers: number.replace(/\D/g, ''), 
+            flash: 0
+          }
+        });
 
         return {
           number,
           status: 'success',
-          messageId: "SMS disabled for testing"
+          messageId: response.data.request_id  // "SMS disabled for testing"
         };
 
       } catch (error) {
