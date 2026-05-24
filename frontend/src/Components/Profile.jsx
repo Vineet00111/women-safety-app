@@ -1,4 +1,4 @@
-import { Home, Map, MessageSquare, User, Edit, LogOut, Star, Settings, Luggage, Camera, X } from 'lucide-react'
+import { Home, MapPin, MessageSquare, User, Edit, LogOut, Star, Settings, Luggage, Camera, X, Loader2, LocateFixed } from 'lucide-react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
 import BottomNav from './Home/BottomNav'
@@ -7,6 +7,8 @@ import { AuthContext } from '../Context/AuthContext'
 import ReviewCard from './ReviewCard'
 import api from '../../API/CustomApi'
 import { Config } from '../../API/Config'
+import { updateHomeLocation } from '../../API/EmergencyApi'
+import { toast } from 'react-toastify'
 
 const ProfileSection = ({ title, children }) => (
   <div className="w-full bg-white rounded-lg shadow-sm border border-gray-100 overflow-hidden">
@@ -19,6 +21,7 @@ function Profile() {
   const navigate = useNavigate();
   const { user, logout, setUser } = useContext(AuthContext);
   const [isUploading, setIsUploading] = useState(false);
+  const [isUpdatingHomeLocation, setIsUpdatingHomeLocation] = useState(false);
   const [showPhotoModal, setShowPhotoModal] = useState(false);
   const [previewUrl, setPreviewUrl] = useState(null);
   const { register, handleSubmit, reset, watch } = useForm();
@@ -101,6 +104,78 @@ function Profile() {
     reset();
   }
 
+  const handleDeleteReview = async (reviewId) => {
+    try {
+      await api.delete(Config.DELETEREVIEWUrl, {
+        params: {
+          userId: user._id,
+          reviewId,
+        },
+      });
+
+      setUser((prevUser) => ({
+        ...prevUser,
+        reviews: prevUser.reviews.filter((review) => review._id !== reviewId),
+      }));
+    } catch (error) {
+      console.error("Failed to delete review", error);
+    }
+  };
+
+  const getCurrentLocation = () =>
+    new Promise((resolve, reject) => {
+      if (!navigator.geolocation) {
+        reject(new Error('Geolocation is not supported on this device.'));
+        return;
+      }
+
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          resolve({
+            latitude: position.coords.latitude,
+            longitude: position.coords.longitude,
+          });
+        },
+        (error) => {
+          if (error.code === error.PERMISSION_DENIED) {
+            reject(new Error('Location permission was denied. Please allow GPS access.'));
+            return;
+          }
+
+          reject(new Error('Unable to capture your current location.'));
+        },
+        {
+          enableHighAccuracy: true,
+          timeout: 10000,
+          maximumAge: 0,
+        }
+      );
+    });
+
+  const handleUpdateHomeLocation = async () => {
+    const mobileNo = String(user?.MobileNo || '').trim();
+
+    if (!/^\d{10}$/.test(mobileNo)) {
+      toast.warn('Please add a valid 10-digit mobile number before updating home location.');
+      return;
+    }
+
+    setIsUpdatingHomeLocation(true);
+    try {
+      const location = await getCurrentLocation();
+      const updatedUser = await updateHomeLocation(location.longitude, location.latitude, mobileNo);
+      setUser((prevUser) => ({
+        ...prevUser,
+        ...updatedUser,
+      }));
+      toast.success('Home location updated successfully!');
+    } catch (error) {
+      toast.error(error.response?.data?.message || error.message || 'Could not update home location.');
+    } finally {
+      setIsUpdatingHomeLocation(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Profile Header */}
@@ -141,8 +216,49 @@ function Profile() {
         {/* Reviews Section */}
         <ProfileSection title="Recent Reviews">
           {user.reviews.length > 0 ? user.reviews.map((review, index) => (
-            <ReviewCard key={index} {...review} username={user.username} />
+            <ReviewCard
+              key={review._id || index}
+              {...review}
+              username={user.username}
+              canDelete
+              onDelete={handleDeleteReview}
+            />
           )) : <p className='text-gray-700'>No Reviews Found</p>}
+        </ProfileSection>
+
+        <ProfileSection title="Home Location">
+          <div className="p-4 flex flex-col gap-4">
+            <div className="flex items-start gap-3">
+              <div className="rounded-full bg-red-50 p-2">
+                <MapPin className="w-5 h-5 text-red-500" />
+              </div>
+              <div>
+                <p className="font-semibold text-gray-900">Update Home Location</p>
+                <p className="text-sm text-gray-500">
+                  Set this while you are at your current or permanent home address so nearby SOS alerts work correctly.
+                </p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleUpdateHomeLocation}
+              disabled={isUpdatingHomeLocation}
+              className="w-full sm:w-fit inline-flex items-center justify-center gap-2 px-5 py-3 rounded-lg bg-red-600 text-white font-semibold hover:bg-red-700 transition-colors disabled:opacity-60"
+            >
+              {isUpdatingHomeLocation ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Updating...
+                </>
+              ) : (
+                <>
+                  <LocateFixed className="w-4 h-4" />
+                  Update Home Location
+                </>
+              )}
+            </button>
+          </div>
         </ProfileSection>
 
         {/* Logout Button */}

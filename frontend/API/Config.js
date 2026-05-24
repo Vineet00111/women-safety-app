@@ -2,6 +2,7 @@ export const Config = {
   baseUrl: "http://localhost:8000",
   SignUPUrl: "http://localhost:8000/api/user/signup",
   LOGINUrl: "http://localhost:8000/api/user/login",
+  FORGOTPASSWORDUrl: "http://localhost:8000/api/user/forgot-password",
   GoogleClientId: "748627875694-hqpvo0akdcvtgjpvqluoap2dm3bafbia.apps.googleusercontent.com",
   GoogleSignUpUrl: "http://localhost:8000/api/user/googleLogin",
   LogoutUrl: "http://localhost:8000/api/user/logout",
@@ -12,8 +13,11 @@ export const Config = {
   EMERGENCYUrl: "http://localhost:8000/api/contacts/emergency",
   ADDREVIEWUrl: "http://localhost:8000/api/reviews/addreview",
   GETREVIEWSUrl: "http://localhost:8000/api/reviews/allreviews",
+  DELETEREVIEWUrl: "http://localhost:8000/api/reviews/delete-review",
   ADDPROFILEPHOTO: "http://localhost:8000/api/profile/add-photo",
   UPDATEUSERNAME: "http://localhost:8000/api/profile/update-name",
   UPDATEEMAIL: "http://localhost:8000/api/profile/update-email",
-  UPDATEPASSWORD: "http://localhost:8000/api/profile/update-password"
+  UPDATEPASSWORD: "http://localhost:8000/api/profile/update-password",
+  EMERGENCYVIDEOUrl: "http://localhost:8000/api/contacts/emergency/video",
+  UPDATEHOMEUrl: "http://localhost:8000/api/user/update-home",
 }

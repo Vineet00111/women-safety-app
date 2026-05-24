@@ -7,379 +7,292 @@ import { AuthContext } from '../../Context/AuthContext';
 import api from '../../../API/CustomApi';
 import { Config } from '../../../API/Config';
 import Loader from './Loader';
-import axios from 'axios';
+import { uploadVideoSOS } from '../../../API/EmergencyApi'; 
 import { toast } from "react-toastify"
+
+const MAX_EMERGENCY_CONTACTS = 6;
 
 function AfterLogin() {
   const [showAddContact, setShowAddContact] = useState(false);
-  const { handleSubmit, register } = useForm();
+  const { handleSubmit, register, reset } = useForm();
   const { user, setUser } = useContext(AuthContext);
   const [contactsdata, setContactsdata] = useState([]);
   const [showLoader, setShowLoader] = useState(false);
   const [MobileNo, setMobileNo] = useState([]);
   const [locationMethod, setLocationMethod] = useState(null);
-  const [locationError, setLocationError] = useState(null);
+  const [activeSOSContext, setActiveSOSContext] = useState(null);
 
   useEffect(() => {
     setContactsdata(Array.isArray(user?.contacts) ? user.contacts : []);
     setMobileNo(Array.isArray(user?.contacts) ? user.contacts : [])
   }, [user]);
 
+  // --- LOCATION LOGIC ---
+  const getIPBasedLocation = async () => {
+    try {
+      let response = await fetch('https://ipapi.co/json/');
+      if (!response.ok) throw new Error('First IP API failed');
+      const data = await response.json();
+      return { latitude: data.latitude, longitude: data.longitude, method: 'ipapi' };
+    } catch (error) {
+      const resp = await fetch('https://ipwho.is/');
+      const fallbackData = await resp.json();
+      return { latitude: fallbackData.latitude, longitude: fallbackData.longitude, method: 'ipwhois' };
+    }
+  };
+
+  const getLocation = async () => {
+    if (navigator.geolocation) {
+      try {
+        const position = await new Promise((resolve, reject) => {
+          navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, timeout: 8000 });
+        });
+        setLocationMethod('gps');
+        return { latitude: position.coords.latitude, longitude: position.coords.longitude, method: 'gps' };
+      } catch (err) { console.log('Falling back to IP'); }
+    }
+    const ipLoc = await getIPBasedLocation();
+    setLocationMethod('ip');
+    return ipLoc;
+  };
+
+  const recordSOSVideo = async () => {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      throw new Error("Camera and microphone are not supported on this device");
+    }
+
+    if (typeof MediaRecorder === "undefined") {
+      throw new Error("Video recording is not supported in this browser");
+    }
+
+    const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+
+    return new Promise((resolve, reject) => {
+      const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp8,opus')
+        ? 'video/webm;codecs=vp8,opus'
+        : 'video/webm';
+      const mediaRecorder = new MediaRecorder(stream, { mimeType });
+      const chunks = [];
+
+      const stopTracks = () => stream.getTracks().forEach((track) => track.stop());
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) {
+          chunks.push(event.data);
+        }
+      };
+
+      mediaRecorder.onerror = (event) => {
+        stopTracks();
+        reject(event.error || new Error("Video recording failed"));
+      };
+
+      mediaRecorder.onstop = () => {
+        stopTracks();
+
+        if (chunks.length === 0) {
+          reject(new Error("No SOS video was recorded"));
+          return;
+        }
+
+        resolve(new Blob(chunks, { type: mimeType }));
+      };
+
+      mediaRecorder.start();
+      toast.info("Camera and microphone enabled. Recording 10-second SOS video...");
+      setTimeout(() => {
+        if (mediaRecorder.state !== "inactive") {
+          mediaRecorder.stop();
+        }
+      }, 10000);
+    });
+  };
+
+  const createSOSContext = async () => {
+    const contactNumbers = MobileNo.map(contact => contact.MobileNo).filter(Boolean);
+    if (contactNumbers.length === 0) throw new Error('Please add emergency contacts first');
+
+    const location = await getLocation();
+    return {
+      contactNumbers,
+      location: { latitude: location.latitude, longitude: location.longitude },
+    };
+  };
+
+  const handleSOSStarted = async () => {
+    setShowLoader(true);
+    try {
+      const sosContext = await createSOSContext();
+      setActiveSOSContext(sosContext);
+      toast.info("SOS will be sent after 6 seconds if you do not cancel.");
+    } catch (error) {
+      console.error('SOS Start Error:', error);
+      if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
+        toast.error("Location access was blocked. Please enable GPS to send an SOS alert.");
+      } else {
+        toast.error(error.message || "Could not start SOS");
+      }
+      throw error;
+    } finally {
+      setShowLoader(false);
+    }
+  };
+
+  // --- SOS LOGIC ---
+  const handleSOSConfirmed = async () => {
+    setShowLoader(true);
+    try {
+      const sosContext = activeSOSContext || await createSOSContext();
+      const locData = sosContext.location;
+      const contactNumbers = sosContext.contactNumbers;
+
+      const videoBlob = await recordSOSVideo();
+      toast.info("Sending final SOS with map and video...");
+      await uploadVideoSOS(user._id, locData, contactNumbers, videoBlob);
+      toast.success("SOS sent successfully!");
+      setActiveSOSContext(null);
+
+    } catch (error) {
+      console.error('SOS Error:', error);
+      // Specific handling for permission issues
+      if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
+        toast.error("Camera/Mic access was blocked. Please enable them in browser settings to use Video SOS.");
+      } else {
+        toast.error(error.message || "Emergency process failed");
+      }
+    } finally {
+      setShowLoader(false);
+    }
+  };
+
+  const handleSOSCancelled = async () => {
+    setActiveSOSContext(null);
+    toast.info("SOS cancelled. No alert was sent.");
+  };
+
+  // --- CONTACT MANAGEMENT ---
   const Submit = async (formData) => {
     setShowLoader(true);
     try {
       const contactData = new FormData();
-      contactData.append('photo', formData.photo[0]);
+      const photoFile = formData.photo?.[0];
+
+      if (photoFile) {
+        contactData.append('photo', photoFile);
+      }
       contactData.append('name', formData.name);
       contactData.append('MobileNo', formData.MobileNo);
       contactData.append('userId', user._id);
 
-      const { data: responseData } = await api.post(
-        Config.ContactUrl,
-        contactData,
-        { headers: { 'Content-Type': 'multipart/form-data' } }
-      );
+      const { data: responseData } = await api.post(Config.ContactUrl, contactData, { 
+        headers: { 'Content-Type': 'multipart/form-data' } 
+      });
 
       if (responseData) {
-        const newContact = responseData.contact;
-        setUser((prevUser) => ({
-          ...prevUser,
-          contacts: [...(prevUser.contacts || []), newContact],
-        }));
+        setUser((prev) => ({ ...prev, contacts: [...(prev.contacts || []), responseData.contact] }));
         setShowAddContact(false);
+        reset();
+        toast.success("Contact added successfully");
       }
-    } catch (error) {
-      console.error('Error adding contact:', error);
-    } finally {
-      setShowLoader(false);
+    } catch (err) { 
+      toast.error("Failed to add contact");
+      console.error(err); 
+    } finally { 
+      setShowLoader(false); 
     }
   };
 
   const handleDelete = async (contactId) => {
     setShowLoader(true);
     try {
-      const response = await api.delete(Config.DELETECONTACTUrl, {
-        params: { userId: user._id, contactId },
-      });
-
-      if (response.status === 200) {
-        console.log('Contact deleted successfully');
-        setContactsdata((prevContacts) =>
-          prevContacts.filter((contact) => contact._id !== contactId)
-        );
-      }
-    } catch (error) {
-      console.error('Error deleting contact:', error);
-    } finally {
-      setShowLoader(false);
+      await api.delete(Config.DELETECONTACTUrl, { params: { userId: user._id, contactId } });
+      setUser(prev => ({ ...prev, contacts: prev.contacts.filter(c => c._id !== contactId) }));
+      toast.success("Contact removed");
+    } catch (err) { 
+        toast.error("Delete failed");
+    } finally { 
+        setShowLoader(false); 
     }
   };
-
-  useEffect(() => {
-    setContactsdata(Array.isArray(user?.contacts) ? user.contacts : []);
-    setMobileNo(Array.isArray(user?.contacts) ? user.contacts : []);
-  }, [user]);
-
-
-  const getIPBasedLocation = async () => {
-    try {
-
-      let response = await fetch('https://ipapi.co/json/');
-      if (!response.ok) throw new Error('First IP API failed');
-
-      const data = await response.json();
-      if (data.latitude && data.longitude) {
-        return {
-          latitude: data.latitude,
-          longitude: data.longitude,
-          accuracy: 50000,
-          method: 'ipapi'
-        };
-      }
-
-
-      response = await fetch('https://ipwho.is/');
-      if (!response.ok) throw new Error('Second IP API failed');
-
-      const fallbackData = await response.json();
-      return {
-        latitude: fallbackData.latitude,
-        longitude: fallbackData.longitude,
-        accuracy: 50000,
-        method: 'ipwhois'
-      };
-    } catch (error) {
-      console.error('IP geolocation failed:', error);
-      throw new Error('Could not determine approximate location from IP');
-    }
-  };
-
-
-  const getLocation = async () => {
-
-    if (navigator.geolocation) {
-      try {
-        const position = await new Promise((resolve, reject) => {
-          navigator.geolocation.getCurrentPosition(
-            resolve,
-            reject,
-            { enableHighAccuracy: true, timeout: 10000 }
-          );
-        });
-
-        setLocationMethod('gps');
-        return {
-          latitude: position.coords.latitude,
-          longitude: position.coords.longitude,
-          accuracy: position.coords.accuracy,
-          method: 'gps'
-        };
-      } catch (gpsError) {
-        console.log('GPS failed, falling back to IP:', gpsError);
-      }
-    }
-
-
-    try {
-      const ipLocation = await getIPBasedLocation();
-      setLocationMethod('ip');
-      return ipLocation;
-    } catch (ipError) {
-      console.error('All location methods failed:', ipError);
-      throw new Error('Could not determine your location');
-    }
-  };
-
-  const handleSOS = async () => {
-    setShowLoader(true);
-    setLocationError(null);
-
-    try {
-      if (MobileNo.length === 0) {
-        throw new Error('No emergency contacts available');
-      }
-
-      const location = await getLocation();
-      console.log('Using location:', location);
-
-      const response = await api.post(Config.EMERGENCYUrl, {
-        contactNumbers: MobileNo.map(contact => contact.MobileNo),
-        location: {
-          latitude: location.latitude,
-          longitude: location.longitude,
-        }
-      });
-
-
-      toast.success(
-        <div>
-          <p>Emergency alert sent successfully!</p>
-          <p className="text-sm mt-1">
-            {location.method === 'gps' ? 'Using precise GPS location' :
-              'Using approximate IP-based location'}
-          </p>
-        </div>
-      );
-
-
-
-
-    } catch (error) {
-      console.error('SOS Error:', error);
-      setLocationError(error.message);
-      toast.error(
-        <div>
-          <p className="font-semibold">Emergency alert failed</p>
-          <p>{error.message}</p>
-          {error.message.includes('location') && (
-            <p className="text-sm mt-1">Please check your internet connection</p>
-          )}
-        </div>,
-        { autoClose: false }
-      );
-    } finally {
-      setShowLoader(false);
-    }
-  };
-
-  const testLocation = async () => {
-    toast.info('Testing location access...');
-    try {
-      const location = await getLocation();
-      toast.success(
-        <div>
-          <p>Location test successful!</p>
-          <p className="text-sm mt-1">
-            Method: {location.method.toUpperCase()}
-            <br />
-            Accuracy: ~{Math.round(location.accuracy / 1000)}km
-          </p>
-        </div>
-      );
-    } catch (error) {
-      toast.error(`Location test failed: ${error.message}`);
-    }
-  };
-
 
   return (
-    <div className="w-full p-2 bg-slate-50">
-
+    <div className="w-full p-2 bg-slate-50 min-h-screen pb-20">
       {locationMethod && (
-        <div className={`p-2 mb-2 text-center ${locationMethod === 'gps' ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'
-          }`}>
-          {locationMethod === 'gps' ? (
-            'Using precise GPS location'
-          ) : (
-            'Using approximate IP-based location'
-          )}
+        <div className={`p-2 mb-2 text-center text-sm font-medium rounded-lg ${locationMethod === 'gps' ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'}`}>
+          {locationMethod === 'gps' ? '✓ Precise GPS Active' : '⚠ Using Approximate Location'}
         </div>
       )}
 
-      {locationError && (
-        <div className="p-2 mb-2 bg-red-100 text-red-800 text-center">
-          {locationError}
-        </div>
-      )}
-
-      <div className="w-full h-[40vh] p-2 flex items-center justify-center " onClick={handleSOS}>
-        <SOSButton />
+      <div className="w-full h-[45vh] flex flex-col items-center justify-center">
+        <SOSButton
+          onSOSStarted={handleSOSStarted}
+          onSOSConfirmed={handleSOSConfirmed}
+          onSOSCancelled={handleSOSCancelled}
+        />
+        <p className="text-gray-500 text-sm mt-4 italic font-mono text-center">
+          Press SOS to start a 6-second emergency countdown. Cancel within 6 seconds to stop the alert.
+        </p>
       </div>
-      <div className='w-full p-2 flex items-center justify-center'>
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            testLocation();
-          }}
-          className="mt-4 px-4 py-2 bg-red-500 text-white rounded-lg text-sm hover:bg-red-600 transition-colors"
-        >
-          Test Location
-        </button>
-      </div>
-
 
       <div className="w-full p-4">
-        <h1 className="text-gray-900 text-xl font-bold md:text-2xl">Emergency Contacts</h1>
-        <div className="w-full flex flex-col gap-3 mt-4 md:flex-row md:flex-wrap md:justify-center md:items-center">
-          {contactsdata.length > 0 ? (
-            contactsdata.map((contact, index) => (
-              <div
-                key={index}
-                className="w-full p-4 rounded-lg bg-white shadow-sm hover:shadow-md border flex items-center gap-4 md:w-[30%] justify-between md:gap-2"
-              >
-                <img
-                  className="w-16 h-16 rounded-full object-cover"
-                  src={contact.photo}
-                  alt="Contact"
-                />
+        <div className="flex justify-between items-center mb-4">
+            <h1 className="text-gray-900 text-xl font-bold">Emergency Contacts</h1>
+            <span className="text-xs font-bold text-gray-400">{contactsdata.length}/{MAX_EMERGENCY_CONTACTS}</span>
+        </div>
+        
+        <div className="flex flex-col gap-3 md:flex-row md:flex-wrap">
+          {contactsdata.map((contact, index) => (
+            <div key={index} className="w-full md:w-[31%] p-4 rounded-xl bg-white shadow-sm border flex items-center justify-between">
+              <div className="flex items-center gap-4">
+                <img className="w-12 h-12 rounded-full object-cover border" src={contact.photo} alt="Contact" />
                 <div>
-                  <h2 className="text-gray-700 font-bold">{contact.name}</h2>
-                  <h3 className="text-gray-500">{contact.MobileNo}</h3>
+                  <h2 className="text-gray-800 font-bold text-sm">{contact.name}</h2>
+                  <h3 className="text-gray-500 text-xs">{contact.MobileNo}</h3>
                 </div>
-                <button
-                  onClick={() => handleDelete(contact._id)}
-                  className="w-10 h-10 rounded-lg border-none hover:text-red-400"
-                >
-                  <CircleX className="h-6 w-6" />
-                </button>
               </div>
-            ))
-          ) : (
-            <h1 className="text-gray-700 font-bold">No Contacts Found</h1>
+              <button onClick={() => handleDelete(contact._id)} className="text-gray-300 hover:text-red-500 transition-colors">
+                <CircleX className="h-5 w-5" />
+              </button>
+            </div>
+          ))}
+
+          {contactsdata.length < MAX_EMERGENCY_CONTACTS && (
+            <button 
+                onClick={() => setShowAddContact(true)}
+                className="w-full md:w-[31%] h-20 border-2 border-dashed border-gray-200 rounded-xl flex items-center justify-center gap-2 text-gray-400 hover:border-red-200 hover:text-red-400 transition-all"
+            >
+                <Plus className="w-5 h-5" />
+                <span className="text-sm font-bold">Add Contact</span>
+            </button>
           )}
         </div>
-      </div>
-
-      <div className="w-full p-4 flex items-center justify-center flex-col">
-        <button
-          className="text-red-400 font-bold flex items-center gap-2 px-4 py-2 hover:bg-red-50 rounded-lg border hover:border-red-300"
-          onClick={() => setShowAddContact(true)}
-          disabled={contactsdata.length >= 3}
-        >
-          <Plus className="w-5 h-5" />
-          Add New Contact
-        </button>
-        {contactsdata.length >= 3 && (
-          <span className="text-red-700 text-center">
-            You Can Add Maximum 3 Contacts
-          </span>
-        )}
       </div>
 
       {showLoader && (
-        <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-30 z-50">
-          <Loader />
+        <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/30">
+            <Loader />
         </div>
       )}
 
       {showAddContact && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-40">
-          <div className="bg-white rounded-lg shadow-xl max-w-lg w-full">
-            <div className="p-6 space-y-6">
-              <div className="flex items-center justify-between">
-                <h2 className="text-xl font-bold">Add New Contact</h2>
-                <button
-                  onClick={() => setShowAddContact(false)}
-                  className="text-gray-400 hover:text-gray-500"
-                >
-                  <X className="h-6 w-6" />
-                </button>
-              </div>
-
-              <form onSubmit={handleSubmit(Submit)} className="space-y-6">
-                <div>
-                  <label className="block text-sm font-medium">
-                    Profile Photo
-                  </label>
-                  <input
-                    type="file"
-                    accept="image/png, image/jpg, image/jpeg, image/webp"
-                    className="block w-full px-3 py-2 border rounded-lg"
-                    {...register('photo', { required: true })}
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium">Name</label>
-                  <input
-                    type="text"
-                    className="block w-full px-3 py-2 border rounded-lg"
-                    {...register('name', { required: true })}
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium">
-                    Contact Number
-                  </label>
-                  <input
-                    type="text"
-                    className="block w-full px-3 py-2 border rounded-lg"
-                    {...register('MobileNo', { required: true })}
-                  />
-                </div>
-
-                <div className="flex justify-end gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setShowAddContact(false)}
-                    className="px-4 py-2 text-sm border rounded-lg"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    className="px-4 py-2 text-sm bg-red-600 text-white rounded-lg"
-                  >
-                    Submit
-                  </button>
-                </div>
-              </form>
+        <div className="fixed inset-0 z-[1000] bg-black/50 flex items-center justify-center p-4 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6">
+            <div className="flex items-center justify-between mb-6">
+                <h2 className="text-xl font-bold text-gray-800">New Contact</h2>
+                <X onClick={() => setShowAddContact(false)} className="cursor-pointer text-gray-400 hover:text-gray-600" />
             </div>
+            <form onSubmit={handleSubmit(Submit)} className="space-y-4">
+                <div>
+                  <label className="text-xs font-bold text-gray-500 ml-1">PROFILE PHOTO</label>
+                  <input type="file" accept="image/*" {...register('photo')} className="mt-1 block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:bg-red-50 file:text-red-700" />
+                </div>
+                <input type="text" placeholder="Name" className="w-full p-3 bg-gray-50 border rounded-xl focus:ring-2 focus:ring-red-100 outline-none" {...register('name', { required: true })} />
+                <input type="text" placeholder="Mobile Number" className="w-full p-3 bg-gray-50 border rounded-xl focus:ring-2 focus:ring-red-100 outline-none" {...register('MobileNo', { required: true })} />
+                <button type="submit" className="w-full py-3 bg-red-600 text-white rounded-xl font-bold shadow-lg shadow-red-200 hover:bg-red-700 transition-colors">Save Guardian</button>
+            </form>
           </div>
         </div>
       )}
-
       <BottomNav />
     </div>
   );

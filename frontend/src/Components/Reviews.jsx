@@ -85,6 +85,38 @@ function Reviews() {
         }
     };
 
+    const handleDeleteReview = async (reviewId) => {
+        if (!user?._id) return;
+
+        setIsLoading(true);
+        try {
+            await api.delete(Config.DELETEREVIEWUrl, {
+                params: {
+                    userId: user._id,
+                    reviewId,
+                },
+            });
+
+            const updatedReviews = allReviews.filter((review) => review._id !== reviewId);
+            setAllReviews(updatedReviews);
+
+            const filteredReviews = searchQuery.trim()
+                ? updatedReviews.filter((review) =>
+                    review.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                    review.review.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                    review.location.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                    review.user?.username?.toLowerCase().includes(searchQuery.toLowerCase())
+                )
+                : updatedReviews;
+
+            setReviews(filteredReviews);
+        } catch (error) {
+            console.error('Error deleting review:', error);
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
     return (
         <div className="flex flex-col h-[calc(100vh-76px)] relative">
             <div className="flex-1 overflow-y-auto p-4">
@@ -156,12 +188,14 @@ function Reviews() {
                                                         {new Date(review.createdAt).toLocaleDateString()}
                                                     </span>
                                                 </div>
-                                                {/* <button
+                                                {review.user?._id === user?._id && (
+                                                <button
                                                     onClick={() => handleDeleteReview(review._id)}
                                                     className="p-2 text-gray-400 hover:text-red-500 transition-colors hover:bg-red-50 rounded-full"
                                                 >
                                                     <Trash2 className="h-4 w-4" />
-                                                </button> */}
+                                                </button>
+                                                )}
                                             </div>
 
                                             <div className="space-y-2">

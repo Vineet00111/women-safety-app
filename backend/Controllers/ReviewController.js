@@ -69,4 +69,34 @@ const GetAllReviews = async (req, res) => {
     }
 };
 
-export { AddReview, GetAllReviews }
+const DeleteReview = async (req, res) => {
+    try {
+        const { userId, reviewId } = req.query;
+
+        if (!userId || !reviewId) {
+            return res.status(400).json({ message: "User ID and review ID are required" });
+        }
+
+        const updatedUser = await User.findOneAndUpdate(
+            { _id: userId, "reviews._id": reviewId },
+            { $pull: { reviews: { _id: reviewId } } },
+            { new: true }
+        );
+
+        if (!updatedUser) {
+            return res.status(404).json({ message: "Review not found or not authorized to delete" });
+        }
+
+        return res.status(200).json({
+            message: "Review deleted successfully",
+            reviews: updatedUser.reviews,
+        });
+    } catch (error) {
+        return res.status(500).json({
+            message: "Error deleting review",
+            error: error.message,
+        });
+    }
+};
+
+export { AddReview, GetAllReviews, DeleteReview }

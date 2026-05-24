@@ -10,22 +10,29 @@ import Map from "./Components/Map"
 import Reviews from "./Components/Reviews"
 import Profile from "./Components/Profile"
 import Settings from "./Components/Settings"
+import ForgotPassword from "./Components/ForgotPassword"
+import SafetyBanner from "./Components/SafetyBanner" // New Import
 import { useContext } from "react"
 import { AuthContext } from "./Context/AuthContext"
 import { ToastContainer } from 'react-toastify';
+import 'react-toastify/dist/ReactToastify.css';
 
 function App() {
-  const { auth } = useContext(AuthContext)
-
+  const { auth, user, refreshUser } = useContext(AuthContext)
 
   return (
     <BrowserRouter>
       <div className="flex flex-col min-h-screen max-w-[85rem] mx-auto">
         <Navbar />
+        
+        {/* Only show the safety nag banner if the user is logged in */}
+        {auth && <SafetyBanner user={user} refreshUser={refreshUser} />}
+
         <main className="flex-1 pt-[7px]">
           <Routes>
             <Route path='/' element={<Home />} />
             <Route path='/login' element={<Login />} />
+            <Route path='/forgot-password' element={<ForgotPassword />} />
             <Route path='/register' element={<Signup />} />
             <Route path='/HomePage'
               element=
@@ -57,7 +64,7 @@ function App() {
             } />
           </Routes>
         </main>
-        <ToastContainer />
+        <ToastContainer position="bottom-right" theme="dark" />
       </div>
     </BrowserRouter>
   )
